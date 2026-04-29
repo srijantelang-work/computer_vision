@@ -1,0 +1,53 @@
+.bpm-chart-container {
+  padding: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.chart-header h3 {
+  font-size: 1.1rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.chart-wrapper {
+  width: 100%;
+  padding-right: 1rem;
+}
+
+.custom-tooltip {
+  padding: 1rem;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.tooltip-label {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tooltip-bpm {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.tooltip-sqi {
+  font-size: 0.8rem;
+}
+
+/* Recharts overrides */
+.recharts-legend-item-text {
+  color: var(--text-secondary) !important;
+  font-size: 0.875rem;
+}

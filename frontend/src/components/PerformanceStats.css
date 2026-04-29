@@ -1,0 +1,105 @@
+.perf-stats-container {
+  padding: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.perf-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.perf-header h3 {
+  font-size: 1.1rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.perf-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.875rem;
+}
+
+.perf-table th, .perf-table td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.perf-table th {
+  color: var(--text-tertiary);
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  padding-bottom: 1rem;
+}
+
+.perf-table tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.row-dim td {
+  opacity: 0.6;
+}
+
+.badge-outline {
+  border: 1px solid var(--border-color);
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-family: 'Outfit', sans-serif;
+  color: var(--text-secondary);
+}
+
+.method-pill {
+  background: var(--bg-tertiary);
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-xl);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.text-right {
+  text-align: right !important;
+}
+
+.inline-icon {
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 0.25rem;
+}
+
+.latency-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.latency-bar {
+  height: 2px;
+  background: var(--accent-primary);
+  border-radius: 1px;
+}
+
+.latency-bar.high { background: var(--danger); }
+.latency-bar.med { background: var(--warning); }
+.latency-bar.low { background: var(--accent-primary); }
+
+.perf-table tfoot td {
+  padding-top: 1.5rem;
+  border-bottom: none;
+  font-weight: 500;
+}
