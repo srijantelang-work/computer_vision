@@ -33,9 +33,9 @@ async def lifespan(app: FastAPI):
     # Initialize the rPPG model asynchronously on startup to avoid the 9s delay on first chunk
     from .rppg_processor import _init_rppg_model
     logger.info("Initializing rPPG model on startup...")
+    # Dispatch to background thread WITHOUT awaiting it, so Uvicorn binds to PORT immediately
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _init_rppg_model)
-    logger.info("rPPG model initialization finished.")
+    loop.run_in_executor(None, _init_rppg_model)
     yield
 
 app = FastAPI(
