@@ -16,6 +16,7 @@ function App() {
   const [chunks, setChunks] = useState([]);
   const [overall, setOverall] = useState(null);
   const [error, setError] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0); // 0 to 100
   
   const eventSourceRef = useRef(null);
   // Use a ref to track the real-time status so closures never go stale
@@ -105,30 +106,54 @@ function App() {
 
   const handleUploadStart = async (formData) => {
     try {
+      const file = formData.get('file');
+      if (!file) return;
+
       setStatus('uploading');
       statusRef.current = 'uploading';
       setError(null);
       setChunks([]);
       setOverall(null);
+      setUploadProgress(0);
 
-      console.log('[Upload] Starting video upload...');
-      const response = await fetch(`${API_BASE}/upload`, {
-        method: 'POST',
-        body: formData,
-      });
+      const CHUNK_SIZE = 1024 * 1024 * 5; // 5MB chunks
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const localJobId = Math.random().toString(36).substring(2, 10);
+      
+      console.log(`[Upload] Starting chunked upload for ${file.name}. Total chunks: ${totalChunks}`);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Upload failed');
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+        
+        const chunkFormData = new FormData();
+        chunkFormData.append('job_id', localJobId);
+        chunkFormData.append('chunk_index', i);
+        chunkFormData.append('total_chunks', totalChunks);
+        chunkFormData.append('filename', file.name);
+        chunkFormData.append('file', chunk);
+
+        const response = await fetch(`${API_BASE}/upload/chunk`, {
+          method: 'POST',
+          body: chunkFormData,
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || `Upload failed at part ${i + 1}`);
+        }
+        
+        const result = await response.json();
+        const progress = Math.round(((i + 1) / totalChunks) * 100);
+        setUploadProgress(progress);
+        
+        if (result.complete) {
+          console.log('[Upload] Final chunk received. Processing started.');
+          setJobId(localJobId);
+          startSSEStream(localJobId);
+        }
       }
-
-      const data = await response.json();
-      console.log('[Upload] Upload successful. Job ID:', data.job_id);
-      setJobId(data.job_id);
-      
-      // Start listening to the SSE stream
-      startSSEStream(data.job_id);
-      
     } catch (err) {
       console.error('[Upload] Error:', err);
       setError(err.message);
@@ -161,7 +186,7 @@ function App() {
                 System Status
               </div>
               <div className={`status-badge ${status}`}>
-                {status === 'uploading' && <><Loader2 size={16} className="spinner" /> Uploading Video...</>}
+                {status === 'uploading' && <><Loader2 size={16} className="spinner" /> Uploading ({uploadProgress}%)...</>}
                 {status === 'processing' && <><Loader2 size={16} className="spinner" /> Processing Pipeline Running ({chunks.length} chunks)</>}
                 {status === 'complete' && <><Activity size={16} /> Analysis Complete</>}
                 {status === 'error' && <><AlertCircle size={16} /> Error Occurred</>}

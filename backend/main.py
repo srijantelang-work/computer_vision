@@ -19,7 +19,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
@@ -75,53 +75,81 @@ async def health():
     return {"status": "ok", "service": "rppg-processor"}
 
 
-@app.post("/upload")
-async def upload_video(file: UploadFile = File(...)):
+@app.post("/upload/chunk")
+async def upload_chunk(
+    job_id: str = Form(...),
+    chunk_index: int = Form(...),
+    total_chunks: int = Form(...),
+    filename: str = Form(...),
+    file: UploadFile = File(...)
+):
     """
-    Upload a face video for rPPG processing.
+    Accepts a video chunk for a given job_id.
+    When the last chunk is received, the file is reassembled and processing starts.
+    """
+    chunk_dir = UPLOAD_DIR / f"chunks_{job_id}"
+    chunk_dir.mkdir(exist_ok=True)
     
-    Accepts .mp4, .avi, .mkv, .mov, .webm files up to 200MB.
-    Returns a job_id to use with /stream/{job_id} and /result/{job_id}.
-    """
-    # Validate file extension
-    ext = Path(file.filename or "").suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported format '{ext}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
-        )
-
-    # Save uploaded file to temp directory
-    job_id = str(uuid.uuid4())[:8]
-    file_path = UPLOAD_DIR / f"{job_id}{ext}"
-
+    chunk_path = chunk_dir / f"chunk_{chunk_index}"
+    
+    # Save this chunk
     try:
-        with open(file_path, "wb") as f:
+        with open(chunk_path, "wb") as f:
             content = await file.read()
-            if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
-                raise HTTPException(status_code=400, detail=f"File too large. Max {MAX_FILE_SIZE_MB}MB.")
             f.write(content)
-        logger.info(f"File uploaded and saved: {file_path} ({len(content)} bytes)")
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Failed to save file: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
+        logger.error(f"Failed to save chunk {chunk_index} for job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Chunk save failed: {e}")
+        
+    logger.info(f"Chunk {chunk_index+1}/{total_chunks} received for job {job_id}")
+    
+    # Check if we have all chunks (check by count)
+    # Note: In a high-concurrency production app, you'd use a safer check (like counting files)
+    received_chunks = list(chunk_dir.glob("chunk_*"))
+    if len(received_chunks) == total_chunks:
+        logger.info(f"All {total_chunks} chunks received for job {job_id}. Reassembling...")
+        
+        ext = Path(filename).suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+             shutil.rmtree(chunk_dir)
+             raise HTTPException(status_code=400, detail=f"Invalid extension {ext}")
 
-    # Initialize job
-    jobs[job_id] = {
-        "status": "queued",
-        "file_path": str(file_path),
-        "filename": file.filename,
-        "events": [],  # SSE event queue
-        "result": None,
-    }
+        final_path = UPLOAD_DIR / f"{job_id}{ext}"
+        
+        try:
+            with open(final_path, "wb") as f_final:
+                for i in range(total_chunks):
+                    chunk_file = chunk_dir / f"chunk_{i}"
+                    if not chunk_file.exists():
+                         raise Exception(f"Missing chunk {i}")
+                    with open(chunk_file, "rb") as f_chunk:
+                        f_final.write(f_chunk.read())
+            
+            # Cleanup chunks
+            shutil.rmtree(chunk_dir)
+            logger.info(f"Reassembly complete for job {job_id}: {final_path}")
+        except Exception as e:
+            logger.error(f"Reassembly failed for job {job_id}: {e}")
+            if chunk_dir.exists(): shutil.rmtree(chunk_dir)
+            raise HTTPException(status_code=500, detail=f"Reassembly failed: {e}")
 
-    # Start background processing
-    asyncio.create_task(_process_job(job_id))
+        # Initialize job
+        jobs[job_id] = {
+            "status": "queued",
+            "file_path": str(final_path),
+            "filename": filename,
+            "events": [],  # SSE event queue
+            "result": None,
+        }
 
-    logger.info(f"Job {job_id} created for '{file.filename}'")
-    return {"job_id": job_id, "status": "processing"}
+        # Start background processing
+        asyncio.create_task(_process_job(job_id))
+
+        logger.info(f"Job {job_id} reassembled and dispatched for '{filename}'")
+        return {"job_id": job_id, "status": "processing", "complete": True}
+        
+    return {"job_id": job_id, "status": "uploading", "chunk_index": chunk_index, "complete": False}
+
 
 
 def _background_processor(job_id: str, file_path: str):
