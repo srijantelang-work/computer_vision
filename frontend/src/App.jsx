@@ -17,6 +17,13 @@ function App() {
   const [overall, setOverall] = useState(null);
   const [error, setError] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0); // 0 to 100
+  const [logs, setLogs] = useState([]);
+
+  const addLog = useCallback((msg) => {
+    const time = new Date().toLocaleTimeString([], { hour12: false });
+    setLogs((prev) => [`[${time}] ${msg}`, ...prev].slice(0, 50));
+    console.log(`[Frontend Log] ${msg}`);
+  }, []);
   
   const eventSourceRef = useRef(null);
   // Use a ref to track the real-time status so closures never go stale
@@ -59,12 +66,12 @@ function App() {
 
         if (data.type === 'metadata') {
           setMetadata(data.video);
-          console.log(`[SSE] Video metadata: ${data.video.duration_s}s, ${data.video.fps} FPS`);
+          addLog(`Metadata received: ${data.video.duration_s}s video at ${data.video.fps} FPS`);
         } else if (data.type === 'chunk') {
           setChunks((prev) => [...prev, data]);
-          console.log(`[SSE] Chunk ${data.chunk} received: BPM=${data.bpm}, SQI=${data.sqi}`);
+          addLog(`Chunk ${data.chunk} processed: ${data.bpm} BPM (SQI: ${data.sqi.toFixed(3)})`);
         } else if (data.type === 'complete') {
-          console.log('[SSE] Complete event received — closing stream');
+          addLog(`Analysis complete! Final BPM: ${data.overall.bpm}`);
           setOverall(data.overall);
           setStatus('complete');
           statusRef.current = 'complete';
@@ -120,7 +127,8 @@ function App() {
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
       const localJobId = Math.random().toString(36).substring(2, 10);
       
-      console.log(`[Upload] Starting chunked upload for ${file.name}. Total chunks: ${totalChunks}`);
+      addLog(`Starting chunked upload for ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+      addLog(`Slicing into ${totalChunks} chunks of 5MB each...`);
 
       for (let i = 0; i < totalChunks; i++) {
         const start = i * CHUNK_SIZE;
@@ -134,6 +142,7 @@ function App() {
         chunkFormData.append('filename', file.name);
         chunkFormData.append('file', chunk);
 
+        addLog(`Uploading part ${i + 1}/${totalChunks}...`);
         const response = await fetch(`${API_BASE}/upload/chunk`, {
           method: 'POST',
           body: chunkFormData,
@@ -141,6 +150,7 @@ function App() {
 
         if (!response.ok) {
           const errorData = await response.json();
+          addLog(`❌ Part ${i + 1} failed: ${errorData.detail || 'Network error'}`);
           throw new Error(errorData.detail || `Upload failed at part ${i + 1}`);
         }
         
@@ -149,7 +159,7 @@ function App() {
         setUploadProgress(progress);
         
         if (result.complete) {
-          console.log('[Upload] Final chunk received. Processing started.');
+          addLog(`✅ All parts uploaded. Server is reassembling file...`);
           setJobId(localJobId);
           startSSEStream(localJobId);
         }
@@ -197,6 +207,32 @@ function App() {
                   {error}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Log Console */}
+          {logs.length > 0 && (
+            <div className="glass-panel" style={{ padding: '1rem', marginTop: '1rem' }}>
+              <div className="section-title" style={{ marginBottom: '0.5rem', fontSize: '1rem' }}>
+                Event Log
+              </div>
+              <div className="log-container" style={{ 
+                background: 'rgba(0,0,0,0.3)', 
+                borderRadius: '8px', 
+                padding: '0.75rem', 
+                fontSize: '0.75rem', 
+                fontFamily: 'monospace',
+                maxHeight: '200px',
+                overflowY: 'auto',
+                color: 'var(--text-secondary)',
+                lineHeight: '1.4'
+              }}>
+                {logs.map((log, i) => (
+                  <div key={i} style={{ marginBottom: '4px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '4px' }}>
+                    {log}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
