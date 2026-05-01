@@ -130,14 +130,32 @@ def _detect_face_roi(frames: np.ndarray) -> Optional[np.ndarray]:
         # Convert RGB → grayscale for detection
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
 
+        # Scale down for faster detection
+        orig_h, orig_w = gray.shape
+        scale = 1.0
+        max_width = 600
+        if orig_w > max_width:
+            scale = max_width / orig_w
+            new_h = int(orig_h * scale)
+            gray_small = cv2.resize(gray, (max_width, new_h), interpolation=cv2.INTER_AREA)
+        else:
+            gray_small = gray
+
         # Detect faces
         faces = cascade.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80)
+            gray_small, scaleFactor=1.1, minNeighbors=5, minSize=(int(80*scale), int(80*scale))
         )
 
         if len(faces) > 0:
             # Use the largest face
-            face_box = max(faces, key=lambda f: f[2] * f[3])
+            small_box = max(faces, key=lambda f: f[2] * f[3])
+            # Scale back to original resolution
+            face_box = [
+                int(small_box[0] / scale),
+                int(small_box[1] / scale),
+                int(small_box[2] / scale),
+                int(small_box[3] / scale)
+            ]
             last_face_box = face_box
         elif last_face_box is not None:
             # Use last known face position (tracking)

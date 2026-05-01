@@ -19,18 +19,30 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
+from contextlib import asynccontextmanager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize the rPPG model asynchronously on startup to avoid the 9s delay on first chunk
+    from .rppg_processor import _init_rppg_model
+    logger.info("Initializing rPPG model on startup...")
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _init_rppg_model)
+    logger.info("rPPG model initialization finished.")
+    yield
 
 app = FastAPI(
     title="rPPG Processor API",
     description="Near real-time remote photoplethysmography — BPM estimation from face video",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # CORS — allow frontend to connect
@@ -85,9 +97,11 @@ async def upload_video(file: UploadFile = File(...)):
             if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
                 raise HTTPException(status_code=400, detail=f"File too large. Max {MAX_FILE_SIZE_MB}MB.")
             f.write(content)
+        logger.info(f"File uploaded and saved: {file_path} ({len(content)} bytes)")
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to save file: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
 
     # Initialize job
@@ -106,46 +120,59 @@ async def upload_video(file: UploadFile = File(...)):
     return {"job_id": job_id, "status": "processing"}
 
 
+def _background_processor(job_id: str, file_path: str):
+    """Synchronous function to run the pipeline and incrementally append to job events."""
+    try:
+        from .chunk_pipeline import process_video
+        logger.info(f"Background thread starting process_video for {job_id}")
+        
+        for event in process_video(file_path):
+            if jobs[job_id].get("status") == "cancelled":
+                logger.info(f"Job {job_id} was cancelled. Stopping background processing.")
+                break
+                
+            jobs[job_id]["events"].append(event)
+            logger.info(f"Job {job_id} event yielded: {event.get('type')}")
+            
+            if event.get("type") == "complete":
+                jobs[job_id]["result"] = event
+                jobs[job_id]["status"] = "complete"
+                logger.info(f"Job {job_id} marked as complete.")
+            elif event.get("type") == "error":
+                jobs[job_id]["status"] = "error"
+                logger.error(f"Job {job_id} received error event: {event.get('message')}")
+                
+        if jobs[job_id]["status"] not in ("complete", "error"):
+            jobs[job_id]["status"] = "complete"
+            logger.info(f"Job {job_id} finished iterating, marked complete.")
+
+    except Exception as e:
+        logger.error(f"Job {job_id} pipeline failed fatally: {e}", exc_info=True)
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["events"].append({"type": "error", "message": str(e)})
+    finally:
+        try:
+            os.unlink(file_path)
+            logger.info(f"Cleaned up temp file for job {job_id}")
+        except OSError:
+            pass
+
+
 async def _process_job(job_id: str):
-    """Background task: run the chunk pipeline and populate the event queue."""
+    """Async wrapper to run the background processor in a thread pool."""
     job = jobs.get(job_id)
     if not job:
         return
 
     job["status"] = "processing"
-
-    try:
-        from .chunk_pipeline import process_video
-
-        # Run the CPU-intensive pipeline in a thread pool to avoid blocking the event loop
-        loop = asyncio.get_event_loop()
-        events = await loop.run_in_executor(None, lambda: list(process_video(job["file_path"])))
-
-        for event in events:
-            job["events"].append(event)
-            if event.get("type") == "complete":
-                job["result"] = event
-                job["status"] = "complete"
-            elif event.get("type") == "error":
-                job["status"] = "error"
-
-        if job["status"] != "complete" and job["status"] != "error":
-            job["status"] = "complete"
-
-    except Exception as e:
-        logger.error(f"Job {job_id} failed: {e}", exc_info=True)
-        job["status"] = "error"
-        job["events"].append({"type": "error", "message": str(e)})
-    finally:
-        # Clean up the uploaded file
-        try:
-            os.unlink(job["file_path"])
-        except OSError:
-            pass
+    logger.info(f"Async _process_job dispatched for {job_id}")
+    
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _background_processor, job_id, job["file_path"])
 
 
 @app.get("/stream/{job_id}")
-async def stream_results(job_id: str):
+async def stream_results(job_id: str, request: Request):
     """
     SSE endpoint — streams chunk results as they become available.
     
@@ -158,12 +185,22 @@ async def stream_results(job_id: str):
     async def event_generator():
         job = jobs[job_id]
         sent_count = 0
+        polls_without_data = 0
 
         while True:
+            if await request.is_disconnected():
+                logger.info(f"Client disconnected from SSE stream for job {job_id}. Cancelling job.")
+                job["status"] = "cancelled"
+                return
+
             # Send any new events
+            had_data = False
             while sent_count < len(job["events"]):
                 event = job["events"][sent_count]
                 sent_count += 1
+                had_data = True
+                polls_without_data = 0
+                logger.info(f"Streaming event to client: {event.get('type')} for job {job_id}")
                 yield {"data": json.dumps(event)}
 
                 # Close stream on terminal events
@@ -173,6 +210,13 @@ async def stream_results(job_id: str):
             # If job finished but we've sent everything, close
             if job["status"] in ("complete", "error") and sent_count >= len(job["events"]):
                 return
+
+            # Heartbeat keepalive — send SSE comment every ~2s of silence
+            # This prevents proxies and browsers from timing out the connection
+            if not had_data:
+                polls_without_data += 1
+                if polls_without_data % 6 == 0:  # Every ~1.8s (6 × 0.3s)
+                    yield {"comment": "keepalive"}
 
             # Poll interval — wait for new events
             await asyncio.sleep(0.3)

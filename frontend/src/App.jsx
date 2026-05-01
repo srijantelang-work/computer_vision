@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Activity, Loader2, AlertCircle } from 'lucide-react';
 import VideoUploader from './components/VideoUploader';
 import ChunkResults from './components/ChunkResults';
@@ -16,6 +16,13 @@ function App() {
   const [error, setError] = useState(null);
   
   const eventSourceRef = useRef(null);
+  // Use a ref to track the real-time status so closures never go stale
+  const statusRef = useRef('idle');
+
+  // Keep statusRef in sync with status state
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   // Cleanup EventSource on unmount
   useEffect(() => {
@@ -26,61 +33,83 @@ function App() {
     };
   }, []);
 
-  const startSSEStream = (id) => {
+  const startSSEStream = useCallback((id) => {
     setStatus('processing');
+    statusRef.current = 'processing';
     setChunks([]);
     setOverall(null);
     setMetadata(null);
     setError(null);
 
-    // If we have proxy enabled, we can use /api/stream... 
-    // Wait, Vite proxy handles /api, but EventSource uses the browser directly.
-    // If we run `npm run dev` (Vite port 5173), we MUST use the proxy route or absolute URL.
-    // Let's use the proxy route.
+    console.log(`[SSE] Opening EventSource to /api/stream/${id}`);
     const es = new EventSource(`/api/stream/${id}`);
     eventSourceRef.current = es;
+
+    es.onopen = () => {
+      console.log('[SSE] Connection opened successfully');
+    };
 
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        console.log('SSE Event:', data.type, data);
+        console.log('[SSE] Event received:', data.type, data);
 
         if (data.type === 'metadata') {
           setMetadata(data.video);
+          console.log(`[SSE] Video metadata: ${data.video.duration_s}s, ${data.video.fps} FPS`);
         } else if (data.type === 'chunk') {
           setChunks((prev) => [...prev, data]);
+          console.log(`[SSE] Chunk ${data.chunk} received: BPM=${data.bpm}, SQI=${data.sqi}`);
         } else if (data.type === 'complete') {
+          console.log('[SSE] Complete event received — closing stream');
           setOverall(data.overall);
           setStatus('complete');
+          statusRef.current = 'complete';
           es.close();
         } else if (data.type === 'error') {
+          console.error('[SSE] Error event from server:', data.message);
           setError(data.message || 'Processing pipeline error');
           setStatus('error');
+          statusRef.current = 'error';
           es.close();
         }
       } catch (err) {
-        console.error('Error parsing SSE data:', err);
+        console.error('[SSE] Error parsing event data:', err, 'Raw:', event.data);
       }
     };
 
     es.onerror = (err) => {
-      console.error('SSE connection error:', err);
-      // Only set error if we aren't already complete
-      if (status !== 'complete') {
-        setError('Lost connection to processing server');
-        setStatus('error');
+      console.error('[SSE] Connection error event fired. ReadyState:', es.readyState);
+      
+      // readyState: 0=CONNECTING, 1=OPEN, 2=CLOSED
+      // If CONNECTING, the browser is retrying automatically — don't kill it.
+      // Only treat as fatal if the connection is fully CLOSED.
+      if (es.readyState === EventSource.CLOSED) {
+        console.error('[SSE] Connection is CLOSED.');
+        // Use the ref (not the stale closure variable) to check current status
+        if (statusRef.current !== 'complete' && statusRef.current !== 'error') {
+          console.error('[SSE] Setting error state — stream died before completion');
+          setError('Lost connection to processing server. Try re-uploading.');
+          setStatus('error');
+          statusRef.current = 'error';
+        }
+        es.close();
+      } else {
+        // Browser is auto-reconnecting. Log it but don't kill the stream.
+        console.warn('[SSE] Transient error — browser will auto-reconnect.');
       }
-      es.close();
     };
-  };
+  }, []);
 
   const handleUploadStart = async (formData) => {
     try {
       setStatus('uploading');
+      statusRef.current = 'uploading';
       setError(null);
       setChunks([]);
       setOverall(null);
 
+      console.log('[Upload] Starting video upload...');
       const response = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
@@ -92,15 +121,17 @@ function App() {
       }
 
       const data = await response.json();
+      console.log('[Upload] Upload successful. Job ID:', data.job_id);
       setJobId(data.job_id);
       
       // Start listening to the SSE stream
       startSSEStream(data.job_id);
       
     } catch (err) {
-      console.error('Upload error:', err);
+      console.error('[Upload] Error:', err);
       setError(err.message);
       setStatus('error');
+      statusRef.current = 'error';
     }
   };
 
@@ -129,7 +160,7 @@ function App() {
               </div>
               <div className={`status-badge ${status}`}>
                 {status === 'uploading' && <><Loader2 size={16} className="spinner" /> Uploading Video...</>}
-                {status === 'processing' && <><Loader2 size={16} className="spinner" /> Processing Pipeline Running</>}
+                {status === 'processing' && <><Loader2 size={16} className="spinner" /> Processing Pipeline Running ({chunks.length} chunks)</>}
                 {status === 'complete' && <><Activity size={16} /> Analysis Complete</>}
                 {status === 'error' && <><AlertCircle size={16} /> Error Occurred</>}
               </div>
