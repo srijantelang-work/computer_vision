@@ -276,10 +276,18 @@ def process_chunk(frames: np.ndarray, fps: float) -> dict:
     # 2. Try Mode A: open-rppg
     result = process_chunk_rppg(frames, fps)
     if result is not None:
+        # If open-rppg succeeded but missing RR, use classical fallback for RR only
+        if result.get("rr") is None:
+            rgb_signals = _detect_face_roi(frames)
+            if rgb_signals is not None:
+                rppg_signal = _chrom_algorithm(rgb_signals)
+                rr_signal = _bandpass_filter(rppg_signal, 0.1, 0.5, fps)
+                result["rr"] = _estimate_rate_fft(rr_signal, fps, 0.1, 0.5)
+
         elapsed = (time.perf_counter() - start) * 1000
         return {**result, "method": "open-rppg", "face_detected": True, "processing_ms": round(elapsed, 1)}
 
-    # 3. Fallback to Mode B: CHROM
+    # 3. Fallback to Mode B: CHROM (Entire pipeline)
     result = process_chunk_chrom(frames, fps)
     elapsed = (time.perf_counter() - start) * 1000
     if result is not None:
