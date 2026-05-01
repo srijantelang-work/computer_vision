@@ -7,6 +7,8 @@ import BPMChart from './components/BPMChart';
 import PerformanceStats from './components/PerformanceStats';
 import './App.css';
 
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
+
 function App() {
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, uploading, processing, complete, error
@@ -41,8 +43,8 @@ function App() {
     setMetadata(null);
     setError(null);
 
-    console.log(`[SSE] Opening EventSource to /api/stream/${id}`);
-    const es = new EventSource(`/api/stream/${id}`);
+    console.log(`[SSE] Opening EventSource to ${API_BASE}/stream/${id}`);
+    const es = new EventSource(`${API_BASE}/stream/${id}`);
     eventSourceRef.current = es;
 
     es.onopen = () => {
@@ -110,7 +112,7 @@ function App() {
       setOverall(null);
 
       console.log('[Upload] Starting video upload...');
-      const response = await fetch('/api/upload', {
+      const response = await fetch(`${API_BASE}/upload`, {
         method: 'POST',
         body: formData,
       });
