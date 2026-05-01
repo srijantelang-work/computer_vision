@@ -127,43 +127,59 @@ function App() {
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
       const localJobId = Math.random().toString(36).substring(2, 10);
       
-      addLog(`Starting chunked upload for ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+      addLog(`Starting parallel chunked upload for ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
       addLog(`Slicing into ${totalChunks} chunks of 5MB each...`);
 
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, file.size);
-        const chunk = file.slice(start, end);
-        
-        const chunkFormData = new FormData();
-        chunkFormData.append('job_id', localJobId);
-        chunkFormData.append('chunk_index', i);
-        chunkFormData.append('total_chunks', totalChunks);
-        chunkFormData.append('filename', file.name);
-        chunkFormData.append('file', chunk);
+      const CONCURRENCY = 3;
+      const chunks_to_upload = Array.from({ length: totalChunks }, (_, i) => i);
+      let uploadedCount = 0;
+      let failed = false;
 
-        addLog(`Uploading part ${i + 1}/${totalChunks}...`);
-        const response = await fetch(`${API_BASE}/upload/chunk`, {
-          method: 'POST',
-          body: chunkFormData,
-        });
+      const uploadWorker = async () => {
+        while (chunks_to_upload.length > 0 && !failed) {
+          const i = chunks_to_upload.shift();
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, file.size);
+          const chunk = file.slice(start, end);
+          
+          const chunkFormData = new FormData();
+          chunkFormData.append('job_id', localJobId);
+          chunkFormData.append('chunk_index', i);
+          chunkFormData.append('total_chunks', totalChunks);
+          chunkFormData.append('filename', file.name);
+          chunkFormData.append('file', chunk);
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          addLog(`❌ Part ${i + 1} failed: ${errorData.detail || 'Network error'}`);
-          throw new Error(errorData.detail || `Upload failed at part ${i + 1}`);
+          try {
+            const response = await fetch(`${API_BASE}/upload/chunk`, {
+              method: 'POST',
+              body: chunkFormData,
+            });
+
+            if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(errorData.detail || `Upload failed at part ${i + 1}`);
+            }
+            
+            const result = await response.json();
+            uploadedCount++;
+            const progress = Math.round((uploadedCount / totalChunks) * 100);
+            setUploadProgress(progress);
+            
+            if (result.complete) {
+              addLog(`✅ All parts uploaded and reassembled.`);
+              setJobId(localJobId);
+              startSSEStream(localJobId);
+            }
+          } catch (err) {
+            failed = true;
+            addLog(`❌ Part ${i + 1} failed: ${err.message}`);
+            throw err;
+          }
         }
-        
-        const result = await response.json();
-        const progress = Math.round(((i + 1) / totalChunks) * 100);
-        setUploadProgress(progress);
-        
-        if (result.complete) {
-          addLog(`✅ All parts uploaded. Server is reassembling file...`);
-          setJobId(localJobId);
-          startSSEStream(localJobId);
-        }
-      }
+      };
+
+      // Start workers
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, totalChunks) }, uploadWorker));
     } catch (err) {
       console.error('[Upload] Error:', err);
       setError(err.message);

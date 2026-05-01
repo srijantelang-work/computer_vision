@@ -38,6 +38,9 @@ def _init_rppg_model(model_name: str = "EfficientPhys.rlap"):
         logger.warning(f"open-rppg unavailable ({e}). Will use CHROM fallback.")
 
 
+import threading
+_rppg_lock = threading.Lock()
+
 def process_chunk_rppg(frames: np.ndarray, fps: float) -> Optional[dict]:
     """
     Process a chunk of frames using the open-rppg deep learning model.
@@ -58,7 +61,12 @@ def process_chunk_rppg(frames: np.ndarray, fps: float) -> Optional[dict]:
             return None
 
     try:
-        result = _rppg_model.process_video_tensor(frames, fps=fps)
+        # Wrap in lock because open-rppg seems non-thread-safe (IndexError on pop)
+        with _rppg_lock:
+            result = _rppg_model.process_video_tensor(frames, fps=fps)
+
+        if result is None:
+            return None
 
         bpm = result.get("hr")
         sqi = result.get("SQI", 0.0)
@@ -126,42 +134,52 @@ def _detect_face_roi(frames: np.ndarray) -> Optional[np.ndarray]:
     rgb_signals = []
     last_face_box = None  # Track face across frames
 
-    for frame in frames:
+    for i, frame in enumerate(frames):
         # Convert RGB → grayscale for detection
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
 
-        # Scale down for faster detection
-        orig_h, orig_w = gray.shape
-        scale = 1.0
-        max_width = 600
-        if orig_w > max_width:
-            scale = max_width / orig_w
-            new_h = int(orig_h * scale)
-            gray_small = cv2.resize(gray, (max_width, new_h), interpolation=cv2.INTER_AREA)
+        # Only detect face every 30 frames (approx 1s) to save CPU
+        # Or if we haven't found a face yet
+        if i % 30 == 0 or last_face_box is None:
+            # Scale down for faster detection
+            orig_h, orig_w = gray.shape
+            scale = 1.0
+            max_width = 600
+            if orig_w > max_width:
+                scale = max_width / orig_w
+                new_h = int(orig_h * scale)
+                gray_small = cv2.resize(gray, (max_width, new_h), interpolation=cv2.INTER_AREA)
+            else:
+                gray_small = gray
+
+            # Detect faces
+            faces = cascade.detectMultiScale(
+                gray_small, scaleFactor=1.1, minNeighbors=5, minSize=(int(80*scale), int(80*scale))
+            )
+
+            if len(faces) > 0:
+                # Use the largest face
+                small_box = max(faces, key=lambda f: f[2] * f[3])
+                # Scale back to original resolution
+                face_box = [
+                    int(small_box[0] / scale),
+                    int(small_box[1] / scale),
+                    int(small_box[2] / scale),
+                    int(small_box[3] / scale)
+                ]
+                last_face_box = face_box
+            elif last_face_box is None:
+                # No face detected and no previous box to reuse
+                rgb_signals.append([0.0, 0.0, 0.0])
+                continue
+            else:
+                # No face detected this time, use last known
+                face_box = last_face_box
         else:
-            gray_small = gray
-
-        # Detect faces
-        faces = cascade.detectMultiScale(
-            gray_small, scaleFactor=1.1, minNeighbors=5, minSize=(int(80*scale), int(80*scale))
-        )
-
-        if len(faces) > 0:
-            # Use the largest face
-            small_box = max(faces, key=lambda f: f[2] * f[3])
-            # Scale back to original resolution
-            face_box = [
-                int(small_box[0] / scale),
-                int(small_box[1] / scale),
-                int(small_box[2] / scale),
-                int(small_box[3] / scale)
-            ]
-            last_face_box = face_box
-        elif last_face_box is not None:
-            # Use last known face position (tracking)
+            # Skip detection, use tracking
             face_box = last_face_box
-        else:
-            # No face ever detected
+
+        if face_box is None:
             rgb_signals.append([0.0, 0.0, 0.0])
             continue
 

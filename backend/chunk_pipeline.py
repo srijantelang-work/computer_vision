@@ -6,6 +6,7 @@ through the rPPG processor, and yields results incrementally for SSE streaming.
 """
 from __future__ import annotations
 
+import os
 import time
 import logging
 import cv2
@@ -102,6 +103,8 @@ def process_video(video_path: str) -> Generator[dict, None, None]:
     chunk_num = 0
     pipeline_start = time.perf_counter()
 
+    # Sequential processing ensures consistency and avoids race conditions in open-rppg.
+    # The face detection optimizations already make this significantly faster than before.
     while True:
         chunk_num += 1
         time_start = (chunk_num - 1) * CHUNK_DURATION
@@ -115,6 +118,7 @@ def process_video(video_path: str) -> Generator[dict, None, None]:
         if is_partial and actual_duration < 1.0:
             break
 
+        # Sequential call to process_chunk
         chunk_start = time.perf_counter()
         result = process_chunk(frames, fps)
         chunk_elapsed = (time.perf_counter() - chunk_start) * 1000
@@ -136,8 +140,10 @@ def process_video(video_path: str) -> Generator[dict, None, None]:
             "is_partial": is_partial,
         }
         chunk_results.append(chunk_result)
-        logger.info(f"Chunk {chunk_num}: BPM={result['bpm']}, SQI={result['sqi']}, Latency={chunk_elapsed:.0f}ms")
+        logger.info(f"Chunk {chunk_num} processed: BPM={result['bpm']}, Method={result['method']}, Latency={chunk_elapsed:.0f}ms")
         yield chunk_result
+
+    cap.release()
 
     cap.release()
     pipeline_elapsed = (time.perf_counter() - pipeline_start) * 1000

@@ -56,6 +56,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    max_age=600,
 )
 
 # ── In-memory job storage ──
@@ -74,6 +75,10 @@ async def health():
     """Health check endpoint."""
     return {"status": "ok", "service": "rppg-processor"}
 
+
+# Global lock and counter for parallel upload synchronization
+upload_lock = asyncio.Lock()
+chunk_trackers: dict[str, set[int]] = {}
 
 @app.post("/upload/chunk")
 async def upload_chunk(
@@ -94,20 +99,29 @@ async def upload_chunk(
     
     # Save this chunk
     try:
+        content = await file.read()
         with open(chunk_path, "wb") as f:
-            content = await file.read()
             f.write(content)
     except Exception as e:
         logger.error(f"Failed to save chunk {chunk_index} for job {job_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Chunk save failed: {e}")
         
-    logger.info(f"Chunk {chunk_index+1}/{total_chunks} received for job {job_id}")
+    logger.info(f"Chunk {chunk_index+1}/{total_chunks} received and saved for job {job_id}")
     
-    # Check if we have all chunks (check by count)
-    # Note: In a high-concurrency production app, you'd use a safer check (like counting files)
-    received_chunks = list(chunk_dir.glob("chunk_*"))
-    if len(received_chunks) == total_chunks:
-        logger.info(f"All {total_chunks} chunks received for job {job_id}. Reassembling...")
+    # Atomic check for completion
+    is_complete = False
+    async with upload_lock:
+        if job_id not in chunk_trackers:
+            chunk_trackers[job_id] = set()
+        
+        chunk_trackers[job_id].add(chunk_index)
+        if len(chunk_trackers[job_id]) == total_chunks:
+            is_complete = True
+            # Clean up tracker
+            del chunk_trackers[job_id]
+
+    if is_complete:
+        logger.info(f"All {total_chunks} chunks verified for job {job_id}. Reassembling...")
         
         ext = Path(filename).suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
