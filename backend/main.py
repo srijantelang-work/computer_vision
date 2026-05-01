@@ -293,6 +293,40 @@ async def get_result(job_id: str):
     return job["result"]
 
 
+import base64
+import cv2
+import numpy as np
+
+@app.post("/test-face")
+async def test_face(request: Request):
+    """
+    Test face detection on a single frame.
+    Expects JSON: { "image": "data:image/jpeg;base64,..." }
+    """
+    try:
+        data = await request.json()
+        image_data = data.get("image")
+        if not image_data:
+            raise HTTPException(status_code=400, detail="Missing image data")
+
+        # Decode base64 image
+        header, encoded = image_data.split(",", 1)
+        decoded = base64.b64decode(encoded)
+        nparr = np.frombuffer(decoded, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        # Convert BGR (OpenCV default) to RGB
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        from .rppg_processor import detect_face_in_frame
+        result = detect_face_in_frame(img_rgb)
+        
+        return result
+    except Exception as e:
+        logger.error(f"Test face failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)

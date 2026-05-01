@@ -123,6 +123,16 @@ def process_video(video_path: str) -> Generator[dict, None, None]:
         result = process_chunk(frames, fps)
         chunk_elapsed = (time.perf_counter() - chunk_start) * 1000
 
+        # EARLY EXIT: If no face is detected in the first chunk, abort immediately.
+        if chunk_num == 1 and not result["face_detected"]:
+            logger.warning(f"No human face detected in the first chunk. Aborting analysis.")
+            yield {
+                "type": "error",
+                "message": "We couldn't find a face in your video. For accurate vital sign analysis, please ensure your face is clearly visible from the start!"
+            }
+            cap.release()
+            return
+
         time_end = time_start + actual_duration
         chunk_result = {
             "type": "chunk",

@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Activity, Loader2, AlertCircle } from 'lucide-react';
+import { Activity, Loader2, AlertCircle, UserX } from 'lucide-react';
 import VideoUploader from './components/VideoUploader';
 import ChunkResults from './components/ChunkResults';
 import FinalSummary from './components/FinalSummary';
 import BPMChart from './components/BPMChart';
 import PerformanceStats from './components/PerformanceStats';
+import FaceDetectionTester from './components/FaceDetectionTester';
 import './App.css';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -205,6 +206,8 @@ function App() {
             isProcessing={status === 'uploading' || status === 'processing'} 
           />
           
+          <FaceDetectionTester />
+          
           {/* Status Indicator */}
           {status !== 'idle' && (
             <div className="glass-panel" style={{ padding: '1rem', marginTop: '1rem' }}>
@@ -283,6 +286,37 @@ function App() {
           )}
         </div>
       </main>
+
+      {/* Error Modal Overlay */}
+      {error && (
+        <div className="error-overlay animate-fade-in">
+          <div className={`error-modal glass-panel ${error.toLowerCase().includes('face') ? 'face-error' : ''}`}>
+            <div className="error-icon">
+              {error.toLowerCase().includes('face') ? (
+                <div style={{ color: 'var(--warning)', background: 'rgba(245, 158, 11, 0.1)', padding: '1.5rem', borderRadius: '50%' }}>
+                  <UserX size={48} />
+                </div>
+              ) : (
+                <AlertCircle size={48} />
+              )}
+            </div>
+            <h2 className="error-title">
+              {error.toLowerCase().includes('face') ? 'Face Not Found' : 'Analysis Failed'}
+            </h2>
+            <p className="error-message">{error}</p>
+            <button 
+              className="error-close-btn"
+              style={error.toLowerCase().includes('face') ? { background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' } : {}}
+              onClick={() => {
+                setError(null);
+                setStatus('idle');
+              }}
+            >
+              {error.toLowerCase().includes('face') ? 'Close and Try Again' : 'Try Again'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
