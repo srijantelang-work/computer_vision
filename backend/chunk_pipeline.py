@@ -15,7 +15,7 @@ from .rppg_processor import process_chunk
 
 logger = logging.getLogger(__name__)
 
-CHUNK_DURATION = 5
+CHUNK_DURATION = 6
 
 
 def get_video_metadata(video_path: str) -> dict:
