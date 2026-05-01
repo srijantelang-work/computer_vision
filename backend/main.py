@@ -243,11 +243,11 @@ async def stream_results(job_id: str, request: Request):
             if job["status"] in ("complete", "error") and sent_count >= len(job["events"]):
                 return
 
-            # Heartbeat keepalive — send SSE comment every ~2s of silence
+            # Heartbeat keepalive — send SSE comment every ~1s of silence
             # This prevents proxies and browsers from timing out the connection
             if not had_data:
                 polls_without_data += 1
-                if polls_without_data % 6 == 0:  # Every ~1.8s (6 × 0.3s)
+                if polls_without_data % 3 == 0:  # Every ~0.9s (3 × 0.3s)
                     yield {"comment": "keepalive"}
 
             # Poll interval — wait for new events

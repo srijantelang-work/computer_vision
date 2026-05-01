@@ -413,12 +413,14 @@ def process_chunk(frames: np.ndarray, fps: float) -> dict:
             - method (str): "open-rppg" or "chrom"
             - face_detected (bool): whether a face was found
     """
+    logger.info(f"Starting process_chunk for {len(frames)} frames at {fps} fps.")
     start = time.perf_counter()
 
     # Try Mode A: open-rppg
     result = process_chunk_rppg(frames, fps)
     if result is not None:
         elapsed = (time.perf_counter() - start) * 1000
+        logger.info(f"process_chunk finished in {round(elapsed, 1)}ms using open-rppg.")
         return {
             **result,
             "method": "open-rppg",
@@ -432,6 +434,7 @@ def process_chunk(frames: np.ndarray, fps: float) -> dict:
     elapsed = (time.perf_counter() - start) * 1000
 
     if result is not None:
+        logger.info(f"process_chunk finished in {round(elapsed, 1)}ms using chrom.")
         return {
             **result,
             "method": "chrom",
@@ -441,6 +444,7 @@ def process_chunk(frames: np.ndarray, fps: float) -> dict:
 
     # Complete failure — no face, no signal
     elapsed = (time.perf_counter() - start) * 1000
+    logger.warning(f"process_chunk failed after {round(elapsed, 1)}ms.")
     return {
         "bpm": None,
         "rr": None,
